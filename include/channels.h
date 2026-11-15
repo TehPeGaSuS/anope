@@ -153,7 +153,12 @@ public:
 	 * @return The number of modes set
 	 * @param param The optional mode param
 	 */
-	size_t HasMode(const Anope::string &name, const Anope::string &param = "");
+	bool HasMode(const Anope::string &name, const Anope::string &param = "");
+
+	/** Counts the number of modes on the specified list.
+	 * @param cm The mode to count for.
+	 */
+	size_t CountModeList(ChannelMode *cm);
 
 	/** Set a mode internally on a channel, this is not sent out to the IRCd
 	 * @param setter The setter
@@ -307,6 +312,14 @@ public:
 	 * @return The bot
 	 */
 	BotInfo *WhoSends() const;
+
+	/* Clear all modes of the specified type that match the target user.
+	 * @param user The user to check.
+	 * @param mode The mode to remove.
+	 * @param self Whether the user is removing modes on themself.
+	 * @return True if the user was unbanned; otherwise, false.
+	 */
+	bool ClearModes(User* user, const Anope::string &mode, bool self);
 
 	/** Finds a channel
 	 * @param name The channel to find

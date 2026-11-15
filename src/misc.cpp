@@ -977,9 +977,9 @@ Anope::string Anope::VersionBuildString()
 	return s;
 }
 
-unsigned Anope::VersionMajor() { return VERSION_MAJOR; }
-unsigned Anope::VersionMinor() { return VERSION_MINOR; }
-unsigned Anope::VersionPatch() { return VERSION_PATCH; }
+Anope::VersionComponent Anope::VersionMajor() { return VERSION_MAJOR; }
+Anope::VersionComponent Anope::VersionMinor() { return VERSION_MINOR; }
+Anope::VersionComponent Anope::VersionPatch() { return VERSION_PATCH; }
 
 Anope::string Anope::RemoveFormatting(const Anope::string &buf)
 {
@@ -1258,7 +1258,8 @@ Anope::string Anope::Template(const Anope::string &str, const Anope::map<Anope::
 					break;
 				}
 
-				auto var = vars.find(str.substr(idx + 1, endidx - idx - 1));
+				auto varname = str.substr(idx + 1, endidx - idx - 1).trim();
+				auto var = vars.find(varname);
 				if (var != vars.end())
 				{
 					// We have a variable, replace it in the string.

@@ -52,20 +52,43 @@ void ModuleManager::CleanupRuntimeDirectory()
 }
 #endif
 
-/* This code was found online at https://web.archive.org/web/20180318184211/https://www.linuxjournal.com/article/3687#comment-26593
- *
- * This function will take a pointer from either dlsym or GetProcAddress and cast it in
- * a way that won't cause C++ warnings/errors to come up.
- */
-template <class TYPE> static TYPE function_cast(void *symbol)
+template <class Type>
+static Type GetSymbol(void *handle, const Anope::string &symbol)
 {
+	static_assert(sizeof(Type) <= sizeof(void*));
 	union
 	{
 		void *symbol;
-		TYPE function;
+		Type typed;
 	} cast;
-	cast.symbol = symbol;
-	return cast.function;
+
+	dlerror();
+	cast.symbol = dlsym(handle, symbol.c_str());
+	return cast.typed;
+}
+
+static ModuleReturn HandleThrowable(const Anope::string &modname, const Anope::string &what,
+	const std::function<void(void)>& callback)
+{
+	try
+	{
+		callback();
+	}
+	catch (const ConfigException &ex)
+	{
+		Log(LOG_TERMINAL) << "Module " << modname << " couldn't " << what << " due to configuration problems: " << ex.GetReason();
+		return MOD_ERR_CONFIG;
+	}
+	catch (const NotImplementedException &)
+	{
+		// Module does not implement the function we called.
+	}
+	catch (const CoreException &ex)
+	{
+		Log() << "Module " << modname << " couldn't " << what << ":" << ex.GetReason();
+		return MOD_ERR_EXCEPTION;
+	}
+	return MOD_ERR_OK;
 }
 
 ModuleReturn ModuleManager::LoadModule(const Anope::string &modname, User *u)
@@ -111,36 +134,23 @@ ModuleReturn ModuleManager::LoadModule(const Anope::string &modname, User *u)
 
 	try
 	{
-		ModuleVersion v = GetVersion(handle);
-
-		if (v.GetMajor() < Anope::VersionMajor() || (v.GetMajor() == Anope::VersionMajor() && v.GetMinor() < Anope::VersionMinor()))
+		const auto module_version = GetVersion(handle);
+		const auto core_version = MODULE_VERSION_PACK(Anope::VersionMajor(), Anope::VersionMinor(), Anope::VersionPatch());
+		if (core_version < module_version)
 		{
-			Log() << "Module " << modname << " is compiled against an older version of Anope " << v.GetMajor() << "." << v.GetMinor() << ", this is " << Anope::VersionShort();
+			const auto [major, minor, patch] = MODULE_VERSION_UNPACK(module_version);
+			Log() << "Module " << modname << " is compiled against Anope " << major << "." << minor << "." << patch << " which is too new for Anope " << Anope::VersionShort();
 			dlclose(handle);
 			return MOD_ERR_VERSION;
 		}
-		else if (v.GetMajor() > Anope::VersionMajor() || (v.GetMajor() == Anope::VersionMajor() && v.GetMinor() > Anope::VersionMinor()))
+		else if (core_version > module_version)
 		{
-			Log() << "Module " << modname << " is compiled against a newer version of Anope " << v.GetMajor() << "." << v.GetMinor() << ", this is " << Anope::VersionShort();
+			const auto [major, minor, patch] = MODULE_VERSION_UNPACK(module_version);
+			Log() << "Module " << modname << " is compiled against Anope " << major << "." << minor << "." << patch << " which is too old for Anope " << Anope::VersionShort();
 			dlclose(handle);
 			return MOD_ERR_VERSION;
 		}
-		else if (v.GetPatch() < Anope::VersionPatch())
-		{
-			Log() << "Module " << modname << " is compiled against an older version of Anope, " << v.GetMajor() << "." << v.GetMinor() << "." << v.GetPatch() << ", this is " << Anope::VersionShort();
-			dlclose(handle);
-			return MOD_ERR_VERSION;
-		}
-		else if (v.GetPatch() > Anope::VersionPatch())
-		{
-			Log() << "Module " << modname << " is compiled against a newer version of Anope, " << v.GetMajor() << "." << v.GetMinor() << "." << v.GetPatch() << ", this is " << Anope::VersionShort();
-			dlclose(handle);
-			return MOD_ERR_VERSION;
-		}
-		else
-		{
-			Log(LOG_DEBUG_2) << "Module " << modname << " is compiled against current version of Anope " << Anope::VersionShort();
-		}
+		Log(LOG_DEBUG_2) << "Module " << modname << " is compiled against current version of Anope " << Anope::VersionShort();
 	}
 	catch (const ModuleException &ex)
 	{
@@ -149,8 +159,7 @@ ModuleReturn ModuleManager::LoadModule(const Anope::string &modname, User *u)
 		return MOD_ERR_NOLOAD;
 	}
 
-	dlerror();
-	auto *func = function_cast<Module *(*)(const Anope::string &, const Anope::string &)>(dlsym(handle, "AnopeInit"));
+	auto *func = GetSymbol<Module *(*)(const Anope::string &, const Anope::string &)>(handle, "AnopeInit");
 	err = dlerror();
 	if (!func)
 	{
@@ -161,24 +170,13 @@ ModuleReturn ModuleManager::LoadModule(const Anope::string &modname, User *u)
 		return MOD_ERR_NOLOAD;
 	}
 
-	/* Create module. */
-	Anope::string nick;
-	if (u)
-		nick = u->nick;
-
-	Module *m;
-
 	ModuleReturn moderr = MOD_ERR_OK;
-	try
-	{
-		m = func(modname, nick);
-	}
-	catch (const ModuleException &ex)
-	{
-		Log() << "Error while loading " << modname << ": " << ex.GetReason();
-		moderr = MOD_ERR_EXCEPTION;
-	}
 
+	Module *m = nullptr;
+	moderr = HandleThrowable(modname, "initialise module", [&func, &m, &modname, &u]()
+	{
+		m = func(modname, u ? u->nick: "");
+	});
 	if (moderr != MOD_ERR_OK)
 	{
 		if (dlclose(handle))
@@ -193,24 +191,10 @@ ModuleReturn ModuleManager::LoadModule(const Anope::string &modname, User *u)
 		Log(LOG_TERMINAL) << "Warning: " << modname << " is deprecated and will be removed in a future release";
 
 	/* Initialize config */
-	try
+	moderr = HandleThrowable(modname, "read configuration", [&m]()
 	{
 		m->OnReload(*Config);
-	}
-	catch (const ModuleException &ex)
-	{
-		Log() << "Module " << modname << " couldn't load:" << ex.GetReason();
-		moderr = MOD_ERR_EXCEPTION;
-	}
-	catch (const ConfigException &ex)
-	{
-		Log() << "Module " << modname << " couldn't load due to configuration problems: " << ex.GetReason();
-		moderr = MOD_ERR_EXCEPTION;
-	}
-	catch (const NotImplementedException &ex)
-	{
-	}
-
+	});
 	if (moderr != MOD_ERR_OK)
 	{
 		DeleteModule(m);
@@ -233,8 +217,7 @@ ModuleReturn ModuleManager::LoadModule(const Anope::string &modname, User *u)
 
 ModuleVersion ModuleManager::GetVersion(void *handle)
 {
-	dlerror();
-	auto *func = function_cast<ModuleVersionC (*)()>(dlsym(handle, "AnopeVersion"));;
+	auto *func = GetSymbol<ModuleVersion (*)()>(handle, "AnopeVersion");
 	if (!func)
 	{
 		Log() << "No version function found, not an Anope module";
@@ -284,26 +267,6 @@ Module *ModuleManager::FindFirstOf(ModType type, bool ignoredeprecated)
 	return NULL;
 }
 
-void ModuleManager::RequireVersion(unsigned major, unsigned minor, unsigned patch)
-{
-	if (Anope::VersionMajor() > major)
-		return;
-	else if (Anope::VersionMajor() == major)
-	{
-		if (Anope::VersionMinor() > minor)
-			return;
-		else if (Anope::VersionMinor() == minor)
-		{
-			if (Anope::VersionPatch() > patch)
-				return;
-			else if (Anope::VersionPatch() == patch)
-				return;
-		}
-	}
-
-	throw ModuleException("This module requires version " + Anope::ToString(major) + "." + Anope::ToString(minor) + "." + Anope::ToString(patch) + " - this is " + Anope::VersionShort());
-}
-
 ModuleReturn ModuleManager::DeleteModule(Module *m)
 {
 	if (!m || !m->handle)
@@ -314,8 +277,7 @@ ModuleReturn ModuleManager::DeleteModule(Module *m)
 
 	Log(LOG_DEBUG) << "Unloading module " << m->name;
 
-	dlerror();
-	auto *destroy_func = function_cast<void (*)(Module *)>(dlsym(m->handle, "AnopeFini"));
+	auto *destroy_func = GetSymbol<void (*)(Module *)>(m->handle, "AnopeFini");
 	const char *err = dlerror();
 	if (!destroy_func || (err && *err))
 	{

@@ -23,6 +23,9 @@
 
 namespace Anope
 {
+	/** A single component of the Anope version. */
+	typedef uint16_t VersionComponent;
+
 	/**
 	 * A wrapper string class around all the other string classes, this class will
 	 * allow us to only require one type of string everywhere that can be converted
@@ -414,9 +417,9 @@ namespace Anope
 	extern CoreExport string Version();
 	extern CoreExport string VersionShort();
 	extern CoreExport string VersionBuildString();
-	extern CoreExport unsigned VersionMajor();
-	extern CoreExport unsigned VersionMinor();
-	extern CoreExport unsigned VersionPatch();
+	extern CoreExport VersionComponent VersionMajor();
+	extern CoreExport VersionComponent VersionMinor();
+	extern CoreExport VersionComponent VersionPatch();
 
 	/** Determines if we are still attached to the terminal, and can print
 	 * messages to the user via stderr/stdout.
@@ -683,12 +686,15 @@ public:
 	/** Returns the reason for the exception.
 	 * The module should probably put something informative here as the user will see this upon failure.
 	 */
-	virtual const Anope::string &GetReason() const
+	const Anope::string &GetReason() const
 	{
 		return err;
 	}
-
-	virtual const Anope::string &GetSource() const
+	const char* what() const noexcept override
+	{
+		return err.c_str();
+	}
+	const Anope::string &GetSource() const
 	{
 		return source;
 	}

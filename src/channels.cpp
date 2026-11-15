@@ -195,17 +195,25 @@ bool Channel::HasUserStatus(User *u, const Anope::string &mname)
 	return HasUserStatus(u, anope_dynamic_static_cast<ChannelModeStatus *>(ModeManager::FindChannelModeByName(mname)));
 }
 
-size_t Channel::HasMode(const Anope::string &mname, const Anope::string &param)
+bool Channel::HasMode(const Anope::string &mname, const Anope::string &param)
 {
 	if (param.empty())
-		return modes.count(mname);
+		return modes.find(mname) != modes.end();
 
 	for (const auto &mode : this->GetModeList(mname))
 	{
 		if (mode.equals_ci(param))
-			return 1;
+			return true;
 	}
-	return 0;
+	return false;
+}
+
+size_t Channel::CountModeList(ChannelMode *cm)
+{
+	auto total = modes.count(cm->name);
+	for (auto* cml : cm->listeners)
+		total += CountModeList(cml);
+	return total;
 }
 
 Anope::string Channel::GetModes(bool complete, bool plus)
@@ -944,6 +952,30 @@ BotInfo *Channel::WhoSends() const
 		return BotListByNick->begin()->second;
 
 	return NULL;
+}
+
+bool Channel::ClearModes(User* user, const Anope::string &mode, bool self)
+{
+	const auto it = IRCD->CanClearModes.find("BAN");
+	if (it != IRCD->CanClearModes.end() && (!self || it->second))
+	{
+		// We can ask the IRCd to clear modes.
+		IRCD->SendClearModes(WhoSends(), this, user, mode, self);
+		return true;
+	}
+
+	// We have to check for modes manually.
+	auto unbanned = false;
+	for (const auto &param : GetModeList(mode))
+	{
+		Entry entry(param, mode);
+		if (entry.Matches(user))
+		{
+			RemoveMode(nullptr, mode, entry.GetMask());
+			unbanned = true;
+		}
+	}
+	return unbanned;
 }
 
 Channel *Channel::Find(const Anope::string &name)
